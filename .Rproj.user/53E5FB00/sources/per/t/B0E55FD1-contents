@@ -1,0 +1,219 @@
+---
+title: "AB testing for CPC"
+author: "Jukun Zhang and Charles"
+institute: "Rutgers University"
+date: "2025/10/03 (updated: `r Sys.Date()`)"
+output:
+  xaringan::moon_reader:
+    css: ["rutgers", "rutgers-fonts"]
+    lib_dir: libs
+    nature:
+      highlightStyle: github
+      highlightLines: true
+      countIncrementalSlides: false
+---
+##**Compute daily CPC for two groups**
+```{r,message=FALSE,echo=FALSE,warning=FALSE}
+# 载入必要包
+library(readr)
+library(dplyr)
+
+# 文件路径（替换成你的路径）
+control_path <- "control_daily_cpc.csv"
+test_path    <- "test_daily_cpc.csv"
+
+# 读取
+control <- read_csv(control_path) %>%
+  mutate(Group = "Control")
+
+test <- read_csv(test_path) %>%
+  mutate(Group = "Test")
+
+# 合并
+dat <- bind_rows(control, test)
+```
+###Control group Daily CPC
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+# 查看前几行
+print(head(control, 5))
+```
+###Test group Daily CPC
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+print(head(test, 5))
+```
+
+---
+##**Wilcoxon-Rank test for two groups CPC**
+###H0: There is no difference in median between Control and Test group
+
+###H1: There has difference in median between Control and Test group
+
+###Test statistic:
+$$
+W = \sum_{i=1}^{n_1} R(X_i)=450
+$$
+
+where $(R(X_i))$ is the rank of the $(i)$-th observation from the first sample(**control**) 
+within the combined sample of size $(n_1+n_2)$.
+```{r,message=FALSE,echo=FALSE,warning=FALSE,results='hide'}
+# install.packages(c("readr","dplyr","stringr","ggplot2","ggpubr","rstatix"))
+library(readr)
+library(dplyr)
+library(stringr)
+library(ggplot2)
+library(ggpubr)
+library(rstatix)
+library(coin)  # 可保留，但后面用 rstatix:: 前缀
+
+# ---------------------------
+# 1) 讀檔與欄位匹配（不变）
+# ---------------------------
+control_path <- "C:/Users/zhang/OneDrive/Desktop/555 Non-parameter Lecture and practice/R code/AB testing example/data/control_group.csv"
+test_path    <- "C:/Users/zhang/OneDrive/Desktop/555 Non-parameter Lecture and practice/R code/AB testing example/data/test_group.csv"
+
+read_any <- function(path) {
+  df <- tryCatch(read_delim(path, delim = ";", show_col_types = FALSE),
+                 error = function(e) NULL)
+  if (!is.null(df) && ncol(df) > 1) return(df)
+  df2 <- tryCatch(read_delim(path, delim = ",", show_col_types = FALSE),
+                  error = function(e) NULL)
+  if (!is.null(df2)) return(df2)
+  stop("無法讀取檔案：", path)
+}
+
+match_col <- function(cols, target) {
+  t <- str_trim(tolower(target))
+  ix <- which(str_trim(tolower(cols)) == t)
+  if (length(ix) > 0) return(cols[ix[1]])
+  ix2 <- which(str_detect(str_replace_all(tolower(cols), " ", ""),
+                          fixed(str_replace_all(t, " ", ""))))
+  if (length(ix2) > 0) return(cols[ix2[1]])
+  return(NA_character_)
+}
+
+to_num  <- function(x) parse_number(as.character(x), locale = locale(decimal_mark = ".", grouping_mark = ","))
+safe_div <- function(a, b) ifelse(is.na(b) | b == 0, NA_real_, a / b)
+
+control_raw <- read_any(control_path)
+test_raw    <- read_any(test_path)
+
+spend_target  <- "Spend [USD]"
+clicks_target <- "# of Website Clicks"
+
+c_spend_col  <- match_col(names(control_raw), spend_target)
+c_clicks_col <- match_col(names(control_raw), clicks_target)
+t_spend_col  <- match_col(names(test_raw),    spend_target)
+t_clicks_col <- match_col(names(test_raw),    clicks_target)
+
+missing <- c()
+if (is.na(c_spend_col))  missing <- c(missing, "control: spend")
+if (is.na(c_clicks_col)) missing <- c(missing, "control: clicks")
+if (is.na(t_spend_col))  missing <- c(missing, "test: spend")
+if (is.na(t_clicks_col)) missing <- c(missing, "test: clicks")
+if (length(missing) > 0) {
+  stop("找不到必要欄位：", paste(missing, collapse = ", "),
+       "\nControl 欄位：", paste(names(control_raw), collapse = " | "),
+       "\nTest 欄位：", paste(names(test_raw), collapse = " | "))
+}
+
+# ---------------------------
+# 2) 計算 CPC + 合併
+# ---------------------------
+control <- control_raw %>%
+  transmute(
+    Group = "Control",
+    Spend  = to_num(.data[[c_spend_col]]),
+    Clicks = to_num(.data[[c_clicks_col]]),
+    CPC    = safe_div(Spend, Clicks)
+  ) %>%
+  filter(!is.na(CPC), is.finite(CPC))
+
+test <- test_raw %>%
+  transmute(
+    Group = "Test",
+    Spend  = to_num(.data[[t_spend_col]]),
+    Clicks = to_num(.data[[t_clicks_col]]),
+    CPC    = safe_div(Spend, Clicks)
+  ) %>%
+  filter(!is.na(CPC), is.finite(CPC))
+
+dat <- bind_rows(control, test) |>
+  mutate(Group = factor(Group, levels = c("Control","Test")))  # 固定方向：Ctrl - Test
+
+if (dplyr::n_distinct(dat$Group) < 2) {
+  stop("有效 CPC 資料不足，至少需要 Control 與 Test 兩組各有一個以上的有效觀測值。")
+}
+
+# ---------------------------
+# 3) Wilcoxon 檢驗 + 效果量 + HL shift
+# ---------------------------
+wtest <- wilcox.test(CPC ~ Group, data = dat, exact = FALSE,
+                     conf.int = TRUE, conf.level = 0.95,
+                     alternative = "two.sided")
+
+
+# ---------------------------
+# 4) 輸出文字結果
+# ---------------------------
+sink("wilcoxon_results.txt")
+cat("Two-sample Wilcoxon rank-sum test (Control vs Test)\n")
+cat("---------------------------------------------------\n")
+cat(sprintf("N_control = %d | N_test = %d\n",
+            sum(dat$Group=="Control"), sum(dat$Group=="Test")))
+cat(sprintf("W = %s | p-value = %.6g\n", format(wtest$statistic), wtest$p.value))
+
+sink()
+
+write_csv(dat, "cpc_by_row.csv")
+
+# ---------------------------
+# 5) 視覺化
+# ---------------------------
+# 只保留 p 值
+annot <- paste0(
+  "Wilcoxon p = ", formatC(wtest$p.value, format="e", digits=2)
+)
+
+p <- ggplot(dat, aes(x = Group, y = CPC, fill = Group)) +
+  geom_violin(trim = TRUE, alpha = 0.5) +
+  geom_boxplot(width = 0.15, outlier.shape = NA) +
+  geom_jitter(width = 0.1, alpha = 0.4, size = 1) +
+  labs(title = "CPC: Control vs Test (Wilcoxon Rank-Sum)",
+       y = "CPC (Spend / Clicks)", x = NULL) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "none")
+
+# 把 p 值放在圖上方中央（不再包含 r 與 HL）
+ymax <- max(dat$CPC, na.rm = TRUE)
+p <- p +
+  annotate("text", x = 1.5, y = ymax, label = annot, vjust = -0.3, size = 4) +
+  coord_cartesian(ylim = c(NA, ymax * 1.10)) +   # 上界稍微抬高一點
+  stat_compare_means(method = "wilcox.test", label = "p.format")  # 這行也只顯示 p
+
+ggsave("cpc_wilcoxon_plot.png", p, width = 7.5, height = 5.2, dpi = 300)
+
+print(wtest)
+
+cat("\n output：\n - wilcoxon_results.txt\n - cpc_by_row.csv\n - cpc_wilcoxon_plot.png\n")
+
+```
+
+---
+##**Summary of Wilcoxon-Rank Test**
+```{r,message=FALSE,echo=FALSE,warning=FALSE}
+print(wtest)
+```
+---
+##**Plot of Wilcoxon-Rank Test**
+```{r fig-Wtest, echo=FALSE, out.width='80%', fig.align='center', fig.pos='H', fig.cap="Plot of Wilcoxon-Rank Test"}
+knitr::include_graphics(here::here("cpc_wilcoxon_plot.png"))
+```
+---
+#Conclution:
+###The AB test provides no evidence that the Test group’s changes affected CPC compared to the Control group — CPC performance remained essentially the same across both conditions.
+
+---
+class: center, middle
+#Thank You!
+
+#Looking forward to your comments!

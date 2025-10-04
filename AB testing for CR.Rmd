@@ -1,0 +1,279 @@
+---
+title: "AB testing for CR"
+author: "Jukun Zhang and Charles"
+institute: "Rutgers University"
+date: "2025/10/04 (updated: `r Sys.Date()`)"
+output:
+  xaringan::moon_reader:
+    css: ["rutgers", "rutgers-fonts"]
+    lib_dir: libs
+    nature:
+      highlightStyle: github
+      highlightLines: true
+      countIncrementalSlides: false
+---
+##**Compute daily CR for two groups**
+```{r,message=FALSE,echo=FALSE,warning=FALSE,results='hide'}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+library(rstatix)
+library(here)
+
+# 目录
+if (!dir.exists(here("data")))  dir.create(here("data"))
+if (!dir.exists(here("plots"))) dir.create(here("plots"))
+
+# --- 0) 读文件时自动识别分隔符（先逗号，若只有1列就试分号） ---
+read_any <- function(path) {
+  df <- suppressMessages(tryCatch(readr::read_csv(path, show_col_types = FALSE), error = function(e) NULL))
+  if (!is.null(df) && ncol(df) > 1) return(df)
+  df2 <- suppressMessages(tryCatch(readr::read_csv2(path, show_col_types = FALSE), error = function(e) NULL)) # read_csv2 = ';'
+  if (!is.null(df2) && ncol(df2) > 1) return(df2)
+  # 再尝试显式分隔
+  df3 <- suppressMessages(tryCatch(readr::read_delim(path, delim = ";", show_col_types = FALSE), error = function(e) NULL))
+  if (!is.null(df3) && ncol(df3) > 1) return(df3)
+  stop("无法正确读取：", path, "（请检查分隔符/编码）", call. = FALSE)
+}
+
+# ---------- 1) 读取 ----------
+control <- read_any(here("data","control_group.csv")) %>% mutate(Group = "Control")
+test    <- read_any(here("data","test_group.csv"))    %>% mutate(Group = "Test")
+
+# 快速确认确实不是“只有1列”
+message("control 列名：", paste(names(control), collapse=" | "))
+message("test    列名：", paste(names(test), collapse=" | "))
+
+# ---------- 2) 列名容错匹配 ----------
+norm <- function(x) gsub("[^a-z0-9]", "", tolower(x))
+match_col <- function(df, candidates) {
+  nms <- names(df); n1 <- norm(nms); cand <- norm(candidates)
+  for (c in cand) { hit <- which(n1 == c); if (length(hit)>0) return(nms[hit[1]]) }
+  for (c in cand) { hit <- which(grepl(c, n1, fixed=TRUE)); if (length(hit)>0) return(nms[hit[1]]) }
+  NA_character_
+}
+find_needed_cols <- function(df) {
+  list(
+    date   = match_col(df, c("date","day")),
+    clicks = match_col(df, c("# of website clicks","website clicks","link clicks","clicks","# of clicks")),
+    purch  = match_col(df, c("# of purchase","# of purchases","purchases","purchase","conversions"))
+  )
+}
+c_cols <- find_needed_cols(control)
+t_cols <- find_needed_cols(test)
+
+# 若缺列，直接报错并把实际列名打出来
+need_stop <- function(cols, which_df, df){
+  miss <- names(cols)[vapply(cols, function(x) is.na(x) || x=="", logical(1))]
+  if (length(miss)>0) {
+    stop(sprintf("%s 缺少必要列：%s\n实际列名：%s",
+                 which_df, paste(miss, collapse=", "), paste(names(df), collapse=" | ")), call. = FALSE)
+  }
+}
+need_stop(c_cols, "control", control)
+need_stop(t_cols, "test", test)
+
+# ---------- 3) 计算 Daily CR ----------
+safe_div <- function(a,b) ifelse(is.na(b) | b==0, NA_real_, a/b)
+
+control_daily <- control %>%
+  transmute(
+    Date     = .data[[c_cols$date]],
+    Group    = "Control",
+    Clicks   = suppressWarnings(as.numeric(.data[[c_cols$clicks]])),
+    Purchase = suppressWarnings(as.numeric(.data[[c_cols$purch]]))
+  ) %>%
+  mutate(CR = safe_div(Purchase, Clicks))
+
+test_daily <- test %>%
+  transmute(
+    Date     = .data[[t_cols$date]],
+    Group    = "Test",
+    Clicks   = suppressWarnings(as.numeric(.data[[t_cols$clicks]])),
+    Purchase = suppressWarnings(as.numeric(.data[[t_cols$purch]]))
+  ) %>%
+  mutate(CR = safe_div(Purchase, Clicks))
+
+# 诊断：原始 vs 有效（非 NA/非 Inf）
+diag_before <- bind_rows(control_daily, test_daily) %>% count(Group, name="n_before")
+diag_after  <- bind_rows(control_daily, test_daily) %>%
+  filter(!is.na(CR), is.finite(CR)) %>% count(Group, name="n_after")
+diag_tbl <- left_join(diag_before, diag_after, by="Group") %>%
+  mutate(n_after = ifelse(is.na(n_after), 0L, n_after))
+print(diag_tbl)
+
+# 输出分组 Daily CR（不过滤，留痕）
+readr::write_csv(control_daily, here("data","control_daily_cr.csv"))
+readr::write_csv(test_daily,    here("data","test_daily_cr.csv"))
+
+# 若某组有效行数为0，给出原因并终止（避免 wilcox 报“分组不足”）
+if (any(diag_tbl$n_after == 0)) {
+  bad <- diag_tbl$Group[diag_tbl$n_after == 0]
+  msg <- paste(bad, collapse=", ")
+  dbg <- bind_rows(control_daily, test_daily) %>% 
+    filter(Group %in% bad) %>%
+    summarise(
+      Group = first(Group),
+      n_rows = n(),
+      clicks_zero_or_na = sum(is.na(Clicks) | Clicks==0, na.rm = TRUE),
+      purchase_na = sum(is.na(Purchase), na.rm = TRUE)
+    )
+  print(dbg)
+  stop(paste0("以下组在计算 CR 后没有任何有效观测（Clicks 为 0/NA 或产生 NA/Inf）：", msg,
+              "。请检查原始列名/分隔符或是否存在大量 Clicks=0。"), call. = FALSE)
+}
+
+# ---------- 4) Wilcoxon ----------
+dat <- bind_rows(control_daily, test_daily) %>%
+  filter(!is.na(CR), is.finite(CR)) %>%
+  mutate(Group = factor(Group, levels = c("Control","Test")))
+
+wtest <- wilcox.test(CR ~ Group, data = dat, exact = FALSE,
+                     conf.int = TRUE, conf.level = 0.95,
+                     alternative = "two.sided")
+print(wtest)
+
+# ---------- 5) 可视化 & 保存 ----------
+p <- ggplot(dat, aes(x = Group, y = CR, fill = Group)) +
+  geom_violin(trim = TRUE, alpha = 0.5) +
+  geom_boxplot(width = 0.15, outlier.shape = NA) +
+  geom_jitter(width = 0.1, alpha = 0.4, size = 1) +
+  labs(title = "Daily Conversion Rate (CR): Control vs Test (Wilcoxon Rank-Sum)",
+       y = "Conversion Rate (Purchases / Clicks)", x = NULL) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "none") +
+  stat_compare_means(method = "wilcox.test", label = "p.format")
+
+readr::write_csv(dat, here("data","cr_by_day.csv"))
+ggsave(filename = here("plots","cr_wilcoxon_plot.png"),
+       plot = p, width = 7.5, height = 5.2, dpi = 300)
+```
+
+###Control group Daily CR
+```{r,message=FALSE,echo=FALSE,warning=FALSE,results='hide'}
+library(readr)
+library(dplyr)
+library(here)
+
+# --- 读文件（自动识别逗号/分号分隔）---
+read_any <- function(path){
+  x <- suppressMessages(tryCatch(readr::read_csv(path, show_col_types = FALSE), error=function(e) NULL))
+  if (!is.null(x) && ncol(x) > 1) return(x)
+  x <- suppressMessages(tryCatch(readr::read_csv2(path, show_col_types = FALSE), error=function(e) NULL)) # ; 分隔
+  if (!is.null(x) && ncol(x) > 1) return(x)
+  x <- suppressMessages(tryCatch(readr::read_delim(path, delim=";", show_col_types = FALSE), error=function(e) NULL))
+  if (!is.null(x) && ncol(x) > 1) return(x)
+  stop("无法读取：", path)
+}
+
+# --- 列名容错匹配 ---
+norm <- function(s) gsub("[^a-z0-9]", "", tolower(s))
+match_col <- function(df, candidates){
+  nms <- names(df); key <- norm(nms); cand <- norm(candidates)
+  hit <- match(cand, key, nomatch = 0); if (any(hit>0)) return(nms[hit[hit>0][1]])
+  for (c in cand){ w <- which(grepl(c, key, fixed = TRUE)); if (length(w)) return(nms[w[1]]) }
+  NA_character_
+}
+
+pick_cols <- function(df){
+  list(
+    date  = match_col(df, c("date","day")),
+    clicks= match_col(df, c("# of website clicks","website clicks","link clicks","clicks","# of clicks")),
+    purch = match_col(df, c("# of purchase","# of purchases","purchases","purchase","conversions"))
+  )
+}
+
+# --- 读取两组 ---
+control_raw <- read_any(here("data","control_group.csv"))
+test_raw    <- read_any(here("data","test_group.csv"))
+
+cmap <- pick_cols(control_raw)
+tmap <- pick_cols(test_raw)
+
+# --- 安全除法 ---
+safe_div <- function(a,b) ifelse(is.na(b) | b==0, NA_real_, a/b)
+
+# --- 生成 Daily CR 表：Date, Purchases, Clicks, CR, Group ---
+make_daily_cr <- function(df, m, group_name){
+  df %>%
+    transmute(
+      Date      = .data[[m$date]],
+      Purchases = suppressWarnings(as.numeric(.data[[m$purch]])),
+      Clicks    = suppressWarnings(as.numeric(.data[[m$clicks]])),
+      CR        = safe_div(Purchases, Clicks),
+      Group     = group_name
+    )
+}
+
+control_daily_cr <- make_daily_cr(control_raw, cmap, "Control") %>%
+  filter(!is.na(CR), is.finite(CR))
+
+test_daily_cr <- make_daily_cr(test_raw, tmap, "Test") %>%
+  filter(!is.na(CR), is.finite(CR))
+
+# 合并（如需整体查看）
+daily_cr_all <- bind_rows(control_daily_cr, test_daily_cr)
+
+# 保存各表（可选）
+write_csv(control_daily_cr, here("data","control_daily_cr.csv"))
+write_csv(test_daily_cr,    here("data","test_daily_cr.csv"))
+write_csv(daily_cr_all,     here("data","cr_by_day.csv"))
+
+# 打印前5行示例（和你截图风格一致）
+print(dplyr::slice_head(control_daily_cr, n = 5))
+print(dplyr::slice_head(test_daily_cr, n = 5))
+
+```
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+# 打印前5行示例（和你截图风格一致）
+print(dplyr::slice_head(control_daily_cr, n = 5))
+
+```
+
+###Test group Daily CR
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+print(dplyr::slice_head(test_daily_cr, n = 5))
+```
+
+---
+##**Wilcoxon-Rank test for two groups CR**
+####H0: There is **no difference** in median between Control and Test group
+
+####H1: There **has difference** in median between Control and Test group
+
+###Test statistic:
+
+$$
+W = \sum_{i=1}^{n_1} R(X_i)=503
+$$
+
+where $(R(X_i))$ is the rank of the $(i)$-th observation from the first sample(**control**) 
+within the combined sample of size $(n_1+n_2)$.
+
+---
+##**Summary of Wilcoxon-Rank Test**
+```{r,message=FALSE,echo=FALSE,warning=FALSE}
+print(wtest)
+```
+---
+##**Plot of Wilcoxon-Rank Test**
+```{r fig-Wtest, echo=FALSE, out.width='80%', fig.align='center', fig.pos='H', fig.cap="Plot of Wilcoxon-Rank Test"}
+knitr::include_graphics(here::here("plots","cr_wilcoxon_plot.png"))
+```
+---
+##**Conclusion**
+
+The Wilcoxon rank-sum test result (\(W = 503, p = 0.3061\)) indicates no statistically significant
+difference in daily Conversion Rate (CR) between the Control and Test groups.
+The 95% confidence interval for the median shift [−0.0104, 0.0437] includes zero, supporting this conclusion.
+
+##**Interpretation:**  
+The A/B test provides no evidence that the Test group’s changes affected CR compared to the Control group — CR performance remained essentially the same across both conditions.
+
+---
+class: center, middle
+#Thank You!
+
+#Looking forward to your comments!
