@@ -386,9 +386,9 @@ knitr::include_graphics(c(
   here::here("results_paired_dailyCR", "01_timeseries_dailyCR.png")
 ))
 ```
-```{r fig-paired-CR2, echo=FALSE, fig.align='center', out.width='48%', fig.pos='H', fig.cap="QQ Plot of CR Differences"}
+```{r fig-paired-CR2, echo=FALSE, fig.align='center', out.width='48%', fig.pos='H', fig.cap="Histogram of Difference between daily CR"}
 knitr::include_graphics(c(
-  here::here("results_paired_dailyCR", "03_qqplot_dailyCR_diff.png")
+  here::here("results_paired_dailyCR", "02_diff_hist_with_CI_dailyCR.png")
 ))
 ```
 
@@ -399,9 +399,8 @@ knitr::include_graphics(c(
 print(summary_df)
 ```
 ###**Conclusion:**  
-####As shown in the time series plot, both groups exhibit similar day-to-day fluctuations in CR, and neither group consistently outperforms the other.
-####The QQ plot demonstrates that the paired differences approximately follow a normal distribution, supporting the validity of the t-test assumption.
-####The paired t-test ($t = -1.55$, $p = 0.13$)) indicates no statistically significant difference in daily CR between the Test and Control groups.  
+- The histogram of paired differences shows that most daily CR differences are clustered near zero with a slight left shift, indicating that the Test group tended to have marginally lower CRs than the Control group. The 95% confidence interval of the mean difference (−5.52%, 0.76%) crosses zero, suggesting that this small negative difference is not statistically significant. The distribution appears approximately symmetric, supporting the normality assumption of the paired t-test.
+- The paired t-test ($t = -1.55$, $p = 0.13$)) indicates no statistically significant difference in daily CR between the Test and Control groups.  
 
 ---
 ##**Wilcoxon-Rank test for two groups CR**

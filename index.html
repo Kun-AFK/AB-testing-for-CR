@@ -84,8 +84,8 @@ which follows a `\(t\)`-distribution with `\((n - 1)\)` degrees of freedom under
 &lt;p class="caption"&gt;Daily CR by Group&lt;/p&gt;
 &lt;/div&gt;
 &lt;div class="figure" style="text-align: center"&gt;
-&lt;img src="results_paired_dailyCR/03_qqplot_dailyCR_diff.png" alt="QQ Plot of CR Differences" width="48%" /&gt;
-&lt;p class="caption"&gt;QQ Plot of CR Differences&lt;/p&gt;
+&lt;img src="results_paired_dailyCR/02_diff_hist_with_CI_dailyCR.png" alt="Histogram of Difference between daily CR" width="48%" /&gt;
+&lt;p class="caption"&gt;Histogram of Difference between daily CR&lt;/p&gt;
 &lt;/div&gt;
 
 ---
@@ -99,9 +99,8 @@ which follows a `\(t\)`-distribution with `\((n - 1)\)` degrees of freedom under
 ## 1 0.1317073 -0.05518272 0.007594764
 ```
 ###**Conclusion:**  
-####As shown in the time series plot, both groups exhibit similar day-to-day fluctuations in CR, and neither group consistently outperforms the other.
-####The QQ plot demonstrates that the paired differences approximately follow a normal distribution, supporting the validity of the t-test assumption.
-####The paired t-test (`\(t = -1.55\)`, `\(p = 0.13\)`)) indicates no statistically significant difference in daily CR between the Test and Control groups.  
+- The histogram of paired differences shows that most daily CR differences are clustered near zero with a slight left shift, indicating that the Test group tended to have marginally lower CRs than the Control group. The 95% confidence interval of the mean difference (−5.52%, 0.76%) crosses zero, suggesting that this small negative difference is not statistically significant. The distribution appears approximately symmetric, supporting the normality assumption of the paired t-test.
+- The paired t-test (`\(t = -1.55\)`, `\(p = 0.13\)`)) indicates no statistically significant difference in daily CR between the Test and Control groups.  
 
 ---
 ##**Wilcoxon-Rank test for two groups CR**
