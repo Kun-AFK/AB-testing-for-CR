@@ -22,10 +22,13 @@ class: center, middle, inverse, title-slide
 ### Rutgers University
 ]
 .date[
-### 2025/10/04 (updated: 2025-10-04)
+### 2025/10/04 (updated: 2025-10-07)
 ]
 
 ---
+
+
+
 
 ##**Compute daily CR for two groups**
 
@@ -57,6 +60,48 @@ class: center, middle, inverse, title-slide
 ## 4 4082019       340   4216 0.0806 Test 
 ## 5 5082019       768   5863 0.131  Test
 ```
+---
+##**Pair T-test for two groups CR**
+The hypotheses for the paired t-test are defined as:
+
+$$
+H_0: \mu_D = 0 \quad \text{vs.} \quad H_1: \mu_D \ne 0
+$$
+
+where `\(\mu_D\)` represents the population mean of the daily CR differences (`\(D_i = CR_{Test,i} - CR_{Control,i}\)`).
+
+The test statistic is calculated as:
+
+$$
+t = \frac{\bar{D} - \mu_{D,0}}{s_D / \sqrt{n}}
+$$
+
+which follows a `\(t\)`-distribution with `\((n - 1)\)` degrees of freedom under `\(H_0\)`.
+---
+###**Plots of Pair T-test**
+&lt;div class="figure" style="text-align: center"&gt;
+&lt;img src="results_paired_dailyCR/01_timeseries_dailyCR.png" alt="Daily CR by Group" width="48%" /&gt;
+&lt;p class="caption"&gt;Daily CR by Group&lt;/p&gt;
+&lt;/div&gt;
+&lt;div class="figure" style="text-align: center"&gt;
+&lt;img src="results_paired_dailyCR/03_qqplot_dailyCR_diff.png" alt="QQ Plot of CR Differences" width="48%" /&gt;
+&lt;p class="caption"&gt;QQ Plot of CR Differences&lt;/p&gt;
+&lt;/div&gt;
+
+---
+##**Pair T-test result and conclusion**
+###**Result:**
+
+```
+##   n_pairs mean_cr_control mean_cr_test mean_diff_test_minus_control    t_stat
+## 1      29        0.114772   0.09097805                  -0.02379398 -1.552778
+##     p_value      ci_low     ci_high
+## 1 0.1317073 -0.05518272 0.007594764
+```
+###**Conclusion:**  
+####As shown in the time series plot, both groups exhibit similar day-to-day fluctuations in CR, and neither group consistently outperforms the other.
+####The QQ plot demonstrates that the paired differences approximately follow a normal distribution, supporting the validity of the t-test assumption.
+####The paired t-test (`\(t = -1.55\)`, `\(p = 0.13\)`)) indicates no statistically significant difference in daily CR between the Test and Control groups.  
 
 ---
 ##**Wilcoxon-Rank test for two groups CR**
@@ -96,13 +141,13 @@ within the combined sample of size `\((n_1+n_2)\)`.
 &lt;p class="caption"&gt;Plot of Wilcoxon-Rank Test&lt;/p&gt;
 &lt;/div&gt;
 ---
-##**Conclusion**
+###**Conclusion**
 
 The Wilcoxon rank-sum test result (\(W = 503, p = 0.3061\)) indicates no statistically significant
 difference in daily Conversion Rate (CR) between the Control and Test groups.
 The 95% confidence interval for the median shift [−0.0104, 0.0437] includes zero, supporting this conclusion.
 
-##**Interpretation:**  
+###**Interpretation:**  
 The A/B test provides no evidence that the Test group’s changes affected CR compared to the Control group — CR performance remained essentially the same across both conditions.
 
 ---

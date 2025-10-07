@@ -12,6 +12,144 @@ output:
       highlightLines: true
       countIncrementalSlides: false
 ---
+
+```{r,message=FALSE,echo=FALSE,warning=FALSE,results='hide'}
+# ===============================
+# Paired t-test on CR + Plots
+# ===============================
+library(readr)
+library(dplyr)
+library(janitor)
+library(lubridate)
+library(ggplot2)
+library(scales)
+library(tidyr)
+library(broom)
+library(stringr)
+
+# ---- I/O ----
+control_path <- "C:/Users/zhang/OneDrive/Desktop/AB testing for CR/data/control_daily_cr.csv"
+test_path    <- "C:/Users/zhang/OneDrive/Desktop/AB testing for CR/data/test_daily_cr.csv"
+
+out_dir <- "C:/Users/zhang/OneDrive/Desktop/AB testing for CR/results_paired_dailyCR"
+if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
+
+# ---- Load (csv, comma-delimited) & clean names ----
+control <- readr::read_csv(control_path, show_col_types = FALSE) %>% janitor::clean_names()
+test    <- readr::read_csv(test_path,    show_col_types = FALSE) %>% janitor::clean_names()
+
+
+pick_cr_col <- function(df){
+  cn <- names(df)
+  cand <- c("cr","conversion_rate","conv_rate","rate")
+  hit <- cand[cand %in% cn][1]
+  if (is.na(hit)) stop("未找到 CR 列。请把每日转化率列命名为 'cr' 或 'conversion_rate'。")
+  return(hit)
+}
+
+cr_col_ctrl <- pick_cr_col(control)
+cr_col_test <- pick_cr_col(test)
+
+# ---- Normalize date & cr ----
+parse_date_flex <- function(x){
+  d <- suppressWarnings(lubridate::dmy(x))
+  if (all(is.na(d))) d <- suppressWarnings(lubridate::ymd(x))
+  if (all(is.na(d))) d <- suppressWarnings(lubridate::mdy(x))
+  return(d)
+}
+
+normalize_cr <- function(v){
+  if (is.character(v)) {
+    num <- readr::parse_number(v)
+  } else {
+    num <- as.numeric(v)
+  }
+  has_pct_symbol <- any(str_detect(as.character(v), "%"), na.rm = TRUE)
+  if (has_pct_symbol || (suppressWarnings(max(num, na.rm = TRUE)) > 1 && suppressWarnings(max(num, na.rm = TRUE)) <= 100)) {
+    num <- num / 100
+  }
+  return(num)
+}
+
+control_pre <- control %>%
+  mutate(
+    date_norm = parse_date_flex(.data[["date"]]),
+    cr_norm   = normalize_cr(.data[[cr_col_ctrl]])
+  )
+
+test_pre <- test %>%
+  mutate(
+    date_norm = parse_date_flex(.data[["date"]]),
+    cr_norm   = normalize_cr(.data[[cr_col_test]])
+  )
+
+# ---- Pair by date ----
+paired <- inner_join(
+  control_pre %>% select(date = date_norm, cr_control = cr_norm),
+  test_pre    %>% select(date = date_norm, cr_test    = cr_norm),
+  by = "date"
+) %>%
+  tidyr::drop_na(cr_control, cr_test) %>%
+  mutate(cr_diff = cr_test - cr_control) %>%
+  arrange(date)
+
+stopifnot(nrow(paired) >= 2)
+
+# ---- Paired t-test (two-sided) ----
+tt <- t.test(paired$cr_test, paired$cr_control, paired = TRUE, alternative = "two.sided")
+tt_tidy <- broom::tidy(tt)
+
+summary_df <- data.frame(
+  n_pairs   = nrow(paired),
+  mean_cr_control = mean(paired$cr_control),
+  mean_cr_test    = mean(paired$cr_test),
+  mean_diff_test_minus_control = mean(paired$cr_diff),
+  t_stat = unname(tt$statistic),
+  p_value = unname(tt$p.value),
+  ci_low = unname(tt$conf.int[1]),
+  ci_high = unname(tt$conf.int[2])
+)
+
+# ---- Save numeric outputs ----
+readr::write_csv(summary_df, file.path(out_dir, "paired_ttest_summary_dailyCR.csv"))
+readr::write_csv(paired,     file.path(out_dir, "paired_dailyCR_by_date.csv"))
+
+# ---- Visualization 2: Histogram of differences + 95% CI ----
+mean_diff <- mean(paired$cr_diff)
+ci_low    <- unname(tt$conf.int[1])
+ci_high   <- unname(tt$conf.int[2])
+
+p2 <- ggplot(paired, aes(x = cr_diff)) +
+  geom_histogram(bins = 15, alpha = 0.85) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_vline(xintercept = mean_diff, linewidth = 1) +
+  annotate("segment",
+           x = ci_low, xend = ci_high, y = 0, yend = 0, linewidth = 1.1) +
+  annotate("point", x = mean_diff, y = 0, size = 3) +
+  scale_x_continuous(labels = percent_format(accuracy = 0.1)) +
+  labs(title = "Paired Differences: CR(Test) - CR(Control)",
+       x = "Difference in Daily CR", y = "Count",
+       subtitle = paste0("Mean diff = ", scales::percent(mean_diff, 0.01),
+                         ", 95% CI [", scales::percent(ci_low, 0.01), ", ",
+                         scales::percent(ci_high, 0.01), "]; p = ", signif(tt$p.value, 4))) +
+  theme_minimal(base_size = 13)
+
+ggsave(file.path(out_dir, "02_diff_hist_with_CI_dailyCR.png"),
+       p2, width = 10, height = 5.5, dpi = 150)
+
+
+# ---- Visualization 3: QQ plot (normality of differences) ----
+png(file.path(out_dir, "03_qqplot_dailyCR_diff.png"), width = 1000, height = 600, res = 130)
+par(mar = c(5,5,4,2) + 0.1)
+qqnorm(paired$cr_diff, main = "QQ Plot of Daily CR Differences (Test - Control)")
+qqline(paired$cr_diff, col = "red", lwd = 2)
+dev.off()
+
+# ---- Console echo ----
+print(summary_df)
+
+```
+
 ##**Compute daily CR for two groups**
 ```{r,message=FALSE,echo=FALSE,warning=FALSE,results='hide'}
 library(readr)
@@ -21,11 +159,10 @@ library(ggpubr)
 library(rstatix)
 library(here)
 
-# 目录
 if (!dir.exists(here("data")))  dir.create(here("data"))
 if (!dir.exists(here("plots"))) dir.create(here("plots"))
 
-# --- 0) 读文件时自动识别分隔符（先逗号，若只有1列就试分号） ---
+# --- 0) Read data ---
 read_any <- function(path) {
   df <- suppressMessages(tryCatch(readr::read_csv(path, show_col_types = FALSE), error = function(e) NULL))
   if (!is.null(df) && ncol(df) > 1) return(df)
@@ -40,12 +177,9 @@ read_any <- function(path) {
 # ---------- 1) 读取 ----------
 control <- read_any(here("data","control_group.csv")) %>% mutate(Group = "Control")
 test    <- read_any(here("data","test_group.csv"))    %>% mutate(Group = "Test")
+message("control col name：", paste(names(control), collapse=" | "))
+message("test    col name：", paste(names(test), collapse=" | "))
 
-# 快速确认确实不是“只有1列”
-message("control 列名：", paste(names(control), collapse=" | "))
-message("test    列名：", paste(names(test), collapse=" | "))
-
-# ---------- 2) 列名容错匹配 ----------
 norm <- function(x) gsub("[^a-z0-9]", "", tolower(x))
 match_col <- function(df, candidates) {
   nms <- names(df); n1 <- norm(nms); cand <- norm(candidates)
@@ -63,18 +197,17 @@ find_needed_cols <- function(df) {
 c_cols <- find_needed_cols(control)
 t_cols <- find_needed_cols(test)
 
-# 若缺列，直接报错并把实际列名打出来
 need_stop <- function(cols, which_df, df){
   miss <- names(cols)[vapply(cols, function(x) is.na(x) || x=="", logical(1))]
   if (length(miss)>0) {
-    stop(sprintf("%s 缺少必要列：%s\n实际列名：%s",
+    stop(sprintf("%s Missing required columns：%s\nReal column name：%s",
                  which_df, paste(miss, collapse=", "), paste(names(df), collapse=" | ")), call. = FALSE)
   }
 }
 need_stop(c_cols, "control", control)
 need_stop(t_cols, "test", test)
 
-# ---------- 3) 计算 Daily CR ----------
+# ---------- 3) Compute Daily CR ----------
 safe_div <- function(a,b) ifelse(is.na(b) | b==0, NA_real_, a/b)
 
 control_daily <- control %>%
@@ -95,19 +228,16 @@ test_daily <- test %>%
   ) %>%
   mutate(CR = safe_div(Purchase, Clicks))
 
-# 诊断：原始 vs 有效（非 NA/非 Inf）
+# diagnose
 diag_before <- bind_rows(control_daily, test_daily) %>% count(Group, name="n_before")
 diag_after  <- bind_rows(control_daily, test_daily) %>%
   filter(!is.na(CR), is.finite(CR)) %>% count(Group, name="n_after")
 diag_tbl <- left_join(diag_before, diag_after, by="Group") %>%
   mutate(n_after = ifelse(is.na(n_after), 0L, n_after))
 print(diag_tbl)
-
-# 输出分组 Daily CR（不过滤，留痕）
 readr::write_csv(control_daily, here("data","control_daily_cr.csv"))
 readr::write_csv(test_daily,    here("data","test_daily_cr.csv"))
 
-# 若某组有效行数为0，给出原因并终止（避免 wilcox 报“分组不足”）
 if (any(diag_tbl$n_after == 0)) {
   bad <- diag_tbl$Group[diag_tbl$n_after == 0]
   msg <- paste(bad, collapse=", ")
@@ -120,8 +250,8 @@ if (any(diag_tbl$n_after == 0)) {
       purchase_na = sum(is.na(Purchase), na.rm = TRUE)
     )
   print(dbg)
-  stop(paste0("以下组在计算 CR 后没有任何有效观测（Clicks 为 0/NA 或产生 NA/Inf）：", msg,
-              "。请检查原始列名/分隔符或是否存在大量 Clicks=0。"), call. = FALSE)
+  stop(paste0("The following groups do not have any valid observations after calculating CR (Clicks is 0/NA or produces NA/Inf）：", msg,
+              ".Please check the original column names/delimiters or if there are a large number of Clicks=0."), call. = FALSE)
 }
 
 # ---------- 4) Wilcoxon ----------
@@ -134,7 +264,6 @@ wtest <- wilcox.test(CR ~ Group, data = dat, exact = FALSE,
                      alternative = "two.sided")
 print(wtest)
 
-# ---------- 5) 可视化 & 保存 ----------
 p <- ggplot(dat, aes(x = Group, y = CR, fill = Group)) +
   geom_violin(trim = TRUE, alpha = 0.5) +
   geom_boxplot(width = 0.15, outlier.shape = NA) +
@@ -156,18 +285,18 @@ library(readr)
 library(dplyr)
 library(here)
 
-# --- 读文件（自动识别逗号/分号分隔）---
+
 read_any <- function(path){
   x <- suppressMessages(tryCatch(readr::read_csv(path, show_col_types = FALSE), error=function(e) NULL))
   if (!is.null(x) && ncol(x) > 1) return(x)
-  x <- suppressMessages(tryCatch(readr::read_csv2(path, show_col_types = FALSE), error=function(e) NULL)) # ; 分隔
+  x <- suppressMessages(tryCatch(readr::read_csv2(path, show_col_types = FALSE), error=function(e) NULL)) 
   if (!is.null(x) && ncol(x) > 1) return(x)
   x <- suppressMessages(tryCatch(readr::read_delim(path, delim=";", show_col_types = FALSE), error=function(e) NULL))
   if (!is.null(x) && ncol(x) > 1) return(x)
-  stop("无法读取：", path)
+  stop("can't read：", path)
 }
 
-# --- 列名容错匹配 ---
+
 norm <- function(s) gsub("[^a-z0-9]", "", tolower(s))
 match_col <- function(df, candidates){
   nms <- names(df); key <- norm(nms); cand <- norm(candidates)
@@ -184,17 +313,16 @@ pick_cols <- function(df){
   )
 }
 
-# --- 读取两组 ---
+
 control_raw <- read_any(here("data","control_group.csv"))
 test_raw    <- read_any(here("data","test_group.csv"))
 
 cmap <- pick_cols(control_raw)
 tmap <- pick_cols(test_raw)
 
-# --- 安全除法 ---
+
 safe_div <- function(a,b) ifelse(is.na(b) | b==0, NA_real_, a/b)
 
-# --- 生成 Daily CR 表：Date, Purchases, Clicks, CR, Group ---
 make_daily_cr <- function(df, m, group_name){
   df %>%
     transmute(
@@ -212,22 +340,20 @@ control_daily_cr <- make_daily_cr(control_raw, cmap, "Control") %>%
 test_daily_cr <- make_daily_cr(test_raw, tmap, "Test") %>%
   filter(!is.na(CR), is.finite(CR))
 
-# 合并（如需整体查看）
 daily_cr_all <- bind_rows(control_daily_cr, test_daily_cr)
 
-# 保存各表（可选）
 write_csv(control_daily_cr, here("data","control_daily_cr.csv"))
 write_csv(test_daily_cr,    here("data","test_daily_cr.csv"))
 write_csv(daily_cr_all,     here("data","cr_by_day.csv"))
 
-# 打印前5行示例（和你截图风格一致）
+
 print(dplyr::slice_head(control_daily_cr, n = 5))
 print(dplyr::slice_head(test_daily_cr, n = 5))
 
 ```
 
 ```{r,echo=FALSE,message=FALSE,warning=FALSE}
-# 打印前5行示例（和你截图风格一致）
+
 print(dplyr::slice_head(control_daily_cr, n = 5))
 
 ```
@@ -236,6 +362,46 @@ print(dplyr::slice_head(control_daily_cr, n = 5))
 ```{r,echo=FALSE,message=FALSE,warning=FALSE}
 print(dplyr::slice_head(test_daily_cr, n = 5))
 ```
+---
+##**Pair T-test for two groups CR**
+The hypotheses for the paired t-test are defined as:
+
+$$
+H_0: \mu_D = 0 \quad \text{vs.} \quad H_1: \mu_D \ne 0
+$$
+
+where $\mu_D$ represents the population mean of the daily CR differences ($D_i = CR_{Test,i} - CR_{Control,i}$).
+
+The test statistic is calculated as:
+
+$$
+t = \frac{\bar{D} - \mu_{D,0}}{s_D / \sqrt{n}}
+$$
+
+which follows a $t$-distribution with $(n - 1)$ degrees of freedom under $H_0$.
+---
+###**Plots of Pair T-test**
+```{r fig-paired-CR, echo=FALSE, fig.align='center', out.width='48%', fig.pos='H', fig.cap="Daily CR by Group"}
+knitr::include_graphics(c(
+  here::here("results_paired_dailyCR", "01_timeseries_dailyCR.png")
+))
+```
+```{r fig-paired-CR2, echo=FALSE, fig.align='center', out.width='48%', fig.pos='H', fig.cap="QQ Plot of CR Differences"}
+knitr::include_graphics(c(
+  here::here("results_paired_dailyCR", "03_qqplot_dailyCR_diff.png")
+))
+```
+
+---
+##**Pair T-test result and conclusion**
+###**Result:**
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+print(summary_df)
+```
+###**Conclusion:**  
+####As shown in the time series plot, both groups exhibit similar day-to-day fluctuations in CR, and neither group consistently outperforms the other.
+####The QQ plot demonstrates that the paired differences approximately follow a normal distribution, supporting the validity of the t-test assumption.
+####The paired t-test ($t = -1.55$, $p = 0.13$)) indicates no statistically significant difference in daily CR between the Test and Control groups.  
 
 ---
 ##**Wilcoxon-Rank test for two groups CR**
@@ -263,13 +429,13 @@ print(wtest)
 knitr::include_graphics(here::here("plots","cr_wilcoxon_plot.png"))
 ```
 ---
-##**Conclusion**
+###**Conclusion**
 
 The Wilcoxon rank-sum test result (\(W = 503, p = 0.3061\)) indicates no statistically significant
 difference in daily Conversion Rate (CR) between the Control and Test groups.
 The 95% confidence interval for the median shift [−0.0104, 0.0437] includes zero, supporting this conclusion.
 
-##**Interpretation:**  
+###**Interpretation:**  
 The A/B test provides no evidence that the Test group’s changes affected CR compared to the Control group — CR performance remained essentially the same across both conditions.
 
 ---
